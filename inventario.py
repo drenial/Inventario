@@ -3,22 +3,17 @@ import pandas as pd
 import os
 from datetime import datetime
 import io
-from PIL import Image
-import numpy as np
 
 # --- CONFIGURACIÓN DE SEGURIDAD ---
-# CAMBIA "1234" POR TU CLAVE DESEADA
-CLAVE_ADMIN = "0302"
+CLAVE_ADMIN = "0302" # Cambia tu clave aquí
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="POS & Servicios", page_icon="🛠️", layout="centered")
-
-# Estilo para ocultar menús de Streamlit
-st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
+st.set_page_config(page_title="Sistema POS & Taller", page_icon="🛠️", layout="centered")
 
 DB_INV = "inventario.csv"
 DB_VEN = "ventas.csv"
 
+# Inicializar estados de sesión
 if 'carrito' not in st.session_state: st.session_state.carrito = []
 if 'admin_auth' not in st.session_state: st.session_state.admin_auth = False
 
@@ -37,161 +32,182 @@ def cargar_datos(archivo, columnas):
 def guardar_datos(df, archivo):
     df.to_csv(archivo, index=False)
 
-# Columnas actualizadas para incluir servicios
+# Columnas Base
 C_INV = ["Codigo", "Tiene_Codigo", "Producto", "Categoría", "Precio Venta", "Stock Actual", "Stock Mínimo"]
 C_VEN = ["Fecha", "Vendedor", "Producto", "Cantidad", "Total", "Metodo Pago", "Punto Salida", "Ayudante", "Descripcion", "Modelo Carro"]
 
 df_inv = cargar_datos(DB_INV, C_INV)
 df_ven = cargar_datos(DB_VEN, C_VEN)
 
-# --- SIDEBAR (ACCESO) ---
+# --- SIDEBAR (SEGURIDAD) ---
 st.sidebar.title("🔐 Acceso")
 if not st.session_state.admin_auth:
-    password = st.sidebar.text_input("Clave de Admin", type="password")
+    pass_in = st.sidebar.text_input("Clave Admin", type="password")
     if st.sidebar.button("Entrar"):
-        if password == CLAVE_ADMIN:
+        if pass_in == CLAVE_ADMIN:
             st.session_state.admin_auth = True
             st.rerun()
 else:
-    st.sidebar.success("Modo Admin")
+    st.sidebar.success("Modo Admin Activo")
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state.admin_auth = False
         st.rerun()
 
 vendedor_fijo = st.sidebar.selectbox("👤 Vendedor/Técnico", ["Vendedor 1", "Vendedor 2", "Admin"])
-salida = st.sidebar.radio("📍 Punto", ["Salida 1", "Salida 2"])
+salida_fija = st.sidebar.radio("📍 Punto de Salida", ["Salida 1", "Salida 2"])
 
-pestanas = st.tabs(["🛒 Punto de Venta", "📦 Inventario", "📊 Cierre Diario"]) if st.session_state.admin_auth else st.tabs(["🛒 Punto de Venta"])
+# Pestañas condicionales
+if st.session_state.admin_auth:
+    tabs = st.tabs(["🛒 Facturación", "📦 Inventario", "📊 Cierre Diario"])
+else:
+    tabs = st.tabs(["🛒 Facturación"])
 
-# --- PESTAÑA 1: PUNTO DE VENTA ---
-with pestanas[0]:
-    st.subheader("🛒 Facturación")
-    
-    tipo_item = st.radio("¿Qué deseas agregar?", ["🛒 Producto", "🛠️ Trabajo/Servicio"], horizontal=True)
-    p_encontrado = None
+# --- PESTAÑA 1: FACTURACIÓN (PRODUCTOS Y TRABAJOS) ---
+with tabs[0]:
+    st.subheader("🛒 Punto de Venta")
+    opcion = st.radio("¿Qué vas a cobrar?", ["📦 Producto", "🛠️ Servicio/Trabajo"], horizontal=True)
+    p_sel = None
 
-    if tipo_item == "🛒 Producto":
-        c_b1, c_b2 = st.columns(2)
-        with c_b1:
-            modo = st.radio("Buscar por:", ["Código", "Nombre"], horizontal=True)
-            if modo == "Código":
-                cod_in = st.text_input("Escanear/Escribir Código")
-                if cod_in:
-                    res = df_inv[df_inv["Codigo"].astype(str) == str(cod_in)]
-                    if not res.empty: p_encontrado = res.iloc[0]
+    if opcion == "📦 Producto":
+        c1, c2 = st.columns(2)
+        with c1:
+            m = st.radio("Buscar por:", ["Código", "Nombre"], horizontal=True)
+            if m == "Código":
+                cod = st.text_input("Escribe Código")
+                if cod:
+                    res = df_inv[df_inv["Codigo"].astype(str) == str(cod)]
+                    if not res.empty: p_sel = res.iloc[0]
             else:
-                nom_in = st.text_input("Nombre del producto")
-                if nom_in:
-                    sug = df_inv[df_inv["Producto"].str.contains(nom_in, case=False)]["Producto"].tolist()
+                nom = st.text_input("Nombre del producto")
+                if nom:
+                    sug = df_inv[df_inv["Producto"].str.contains(nom, case=False)]["Producto"].tolist()
                     sel = st.selectbox("Seleccionar", ["-"] + sug)
-                    if sel != "-": p_encontrado = df_inv[df_inv["Producto"] == sel].iloc[0]
-        
-        with c_b2:
-            if p_encontrado is not None:
-                st.info(f"**{p_encontrado['Producto']}**\n\nPrecio: ${p_encontrado['Precio Venta']}")
-                cant = st.number_input("Cant", min_value=1, max_value=max(1, int(p_encontrado['Stock Actual'])), value=1)
-                if st.button("➕ Añadir Producto"):
+                    if sel != "-": p_sel = df_inv[df_inv["Producto"] == sel].iloc[0]
+        with c2:
+            if p_sel is not None:
+                st.info(f"**{p_sel['Producto']}**\n\nStock: {p_sel['Stock Actual']}")
+                can = st.number_input("Cantidad", min_value=1, max_value=max(1, int(p_sel['Stock Actual'])), value=1)
+                if st.button("➕ Añadir al Carrito"):
                     st.session_state.carrito.append({
-                        "Tipo": "Producto", "Producto": p_encontrado['Producto'],
-                        "Precio": float(p_encontrado['Precio Venta']), "Cantidad": int(cant),
-                        "Subtotal": float(p_encontrado['Precio Venta'] * cant),
-                        "Ayudante": "", "Descripcion": "Venta de repuesto", "Modelo Carro": ""
+                        "Tipo": "Prod", "Producto": p_sel['Producto'],
+                        "Precio": float(p_sel['Precio Venta']), "Cantidad": int(can),
+                        "Subtotal": float(p_sel['Precio Venta']*can),
+                        "Ayudante": "", "Descripcion": "", "Modelo Carro": ""
                     })
                     st.rerun()
-    
-    else: # SECCIÓN DE TRABAJO/SERVICIO
+    else:
         with st.container():
-            st.info("🛠️ Registro de Mano de Obra / Trabajo")
-            c_t1, c_t2 = st.columns(2)
-            with c_t1:
-                desc_trabajo = st.text_area("¿Qué trabajo se realizó?", placeholder="Ej: Cambio de aceite y filtro")
-                modelo_carro = st.text_input("Modelo del Carro (Opcional)")
-            with c_t2:
-                ayudante = st.text_input("Nombre del Ayudante (Opcional)")
-                precio_trabajo = st.number_input("Costo del Trabajo ($)", min_value=0.0, step=1.0)
-            
-            if st.button("➕ Añadir Trabajo al Carrito"):
-                if desc_trabajo and precio_trabajo > 0:
+            st.info("🛠️ Datos del Trabajo")
+            ct1, ct2 = st.columns(2)
+            with ct1:
+                desc = st.text_area("¿Qué se hizo?")
+                carro = st.text_input("Modelo del Carro (Opcional)")
+            with ct2:
+                ayu = st.text_input("Nombre del Ayudante")
+                pre = st.number_input("Costo de Mano de Obra ($)", min_value=0.0)
+            if st.button("➕ Añadir Servicio"):
+                if desc and pre > 0:
                     st.session_state.carrito.append({
-                        "Tipo": "Trabajo", "Producto": "SERVICIO: " + desc_trabajo[:20] + "...",
-                        "Precio": float(precio_trabajo), "Cantidad": 1,
-                        "Subtotal": float(precio_trabajo),
-                        "Ayudante": ayudante, "Descripcion": desc_trabajo, "Modelo Carro": modelo_carro
+                        "Tipo": "Trab", "Producto": "SERV: " + desc[:20],
+                        "Precio": float(pre), "Cantidad": 1, "Subtotal": float(pre),
+                        "Ayudante": ayu, "Descripcion": desc, "Modelo Carro": carro
                     })
-                    st.success("Trabajo añadido")
                     st.rerun()
-                else: st.warning("Por favor rellena descripción y precio")
 
     st.divider()
-    
     if st.session_state.carrito:
-        st.write("### Detalle de Factura")
-        for i, item in enumerate(st.session_state.carrito):
-            c_it, c_dl = st.columns([4, 1])
-            tipo_icon = "📦" if item["Tipo"] == "Producto" else "🛠️"
-            c_it.write(f"{tipo_icon} **{item['Cantidad']}x** {item['Producto']} — ${item['Subtotal']:,.2f}")
-            if c_dl.button("🗑️", key=f"del_{i}"):
+        st.write("### Detalle de Compra")
+        for i, it in enumerate(st.session_state.carrito):
+            col_i, col_d = st.columns([4, 1])
+            icono = "📦" if it["Tipo"] == "Prod" else "🛠️"
+            col_i.write(f"{icono} **{it['Cantidad']}x** {it['Producto']} — ${it['Subtotal']:.2f}")
+            if col_d.button("🗑️", key=f"del_{i}"):
                 st.session_state.carrito.pop(i); st.rerun()
         
-        total_p = sum(it['Subtotal'] for it in st.session_state.carrito)
-        st.markdown(f"## TOTAL A COBRAR: ${total_p:,.2f}")
-        metodo = st.selectbox("Método de Pago", ["Pago Móvil", "Punto", "Zelle", "Binance", "Efectivo"])
+        total_p = sum(i['Subtotal'] for i in st.session_state.carrito)
+        st.markdown(f"## TOTAL: ${total_p:,.2f}")
+        met = st.selectbox("Forma de Pago", ["Pago Móvil", "Punto", "Zelle", "Binance", "Efectivo"])
         
         cb1, cb2 = st.columns(2)
-        if cb1.button("✅ PROCESAR TODO", use_container_width=True):
-            for item in st.session_state.carrito:
-                # Si es producto, restar stock
-                if item["Tipo"] == "Producto":
-                    idx = df_inv[df_inv["Producto"] == item["Producto"]].index[0]
-                    df_inv.at[idx, "Stock Actual"] -= item["Cantidad"]
+        if cb1.button("✅ FINALIZAR Y FACTURAR", use_container_width=True):
+            for it in st.session_state.carrito:
+                if it["Tipo"] == "Prod":
+                    idx = df_inv[df_inv["Producto"] == it["Producto"]].index[0]
+                    df_inv.at[idx, "Stock Actual"] -= it["Cantidad"]
                 
-                # Registrar en ventas (Producto o Trabajo)
-                nv = pd.DataFrame([{
+                nueva_v = pd.DataFrame([{
                     "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "Vendedor": vendedor_fijo, "Producto": item["Producto"],
-                    "Cantidad": item["Cantidad"], "Total": item["Subtotal"],
-                    "Metodo Pago": metodo, "Punto Salida": salida,
-                    "Ayudante": item["Ayudante"], "Descripcion": item["Descripcion"],
-                    "Modelo Carro": item["Modelo Carro"]
+                    "Vendedor": vendedor_fijo, "Producto": it["Producto"],
+                    "Cantidad": it["Cantidad"], "Total": it["Subtotal"],
+                    "Metodo Pago": met, "Punto Salida": salida_fija,
+                    "Ayudante": it["Ayudante"], "Descripcion": it["Descripcion"], "Modelo Carro": it["Modelo Carro"]
                 }])
-                df_ven = pd.concat([df_ven, nv], ignore_index=True)
+                df_ven = pd.concat([df_ven, nueva_v], ignore_index=True)
             
             guardar_datos(df_inv, DB_INV); guardar_datos(df_ven, DB_VEN)
             st.session_state.carrito = []
-            st.success("¡Operación Exitosa!"); st.balloons(); st.rerun()
+            st.success("¡Venta procesada con éxito!")
+            st.rerun()
         
         if cb2.button("🚫 CANCELAR TODO", use_container_width=True):
             st.session_state.carrito = []
             st.rerun()
 
-# --- PESTAÑAS ADMIN (INVENTARIO Y CIERRE) ---
+# --- PESTAÑAS ADMIN ---
 if st.session_state.admin_auth:
-    with pestanas[1]: # INVENTARIO
-        st.subheader("📦 Inventario")
-        if st.button("➕ NUEVO PRODUCTO"):
+    # --- INVENTARIO ---
+    with tabs[1]:
+        st.subheader("📦 Gestión de Inventario")
+        col_inv1, col_inv2 = st.columns(2)
+        
+        if col_inv1.button("➕ AGREGAR PRODUCTO NUEVO"):
             st.session_state.mostrar_form = not st.session_state.get('mostrar_form', False)
+        
+        with col_inv2.expander("📉 RESTA MANUAL (Daño/Cambio)"):
+            p_aj = st.selectbox("Producto", df_inv["Producto"].tolist() if not df_inv.empty else [])
+            c_aj = st.number_input("Resta Cantidad", min_value=1, value=1)
+            if st.button("Confirmar Ajuste"):
+                idx_a = df_inv[df_inv["Producto"] == p_aj].index[0]
+                df_inv.at[idx_a, "Stock Actual"] -= c_aj
+                guardar_datos(df_inv, DB_INV); st.success("Stock actualizado"); st.rerun()
+
         if st.session_state.get('mostrar_form', False):
-            with st.form("f_new"):
-                t_c = st.radio("¿Código?", ["Sí", "No"], horizontal=True)
-                f_c = st.text_input("Código"); f_n = st.text_input("Nombre")
-                f_p = st.number_input("Precio", min_value=0.0); f_s = st.number_input("Stock", min_value=0)
+            with st.form("f_nuevo"):
+                tc = st.radio("¿Código?", ["Sí", "No"], horizontal=True)
+                fc = st.text_input("Código"); fn = st.text_input("Nombre")
+                fp = st.number_input("Precio", min_value=0.0); fs = st.number_input("Stock", min_value=0)
                 if st.form_submit_button("Guardar"):
-                    nuevo = pd.DataFrame([{"Codigo": f_c if t_c=="Sí" else "SIN_CODIGO", "Tiene_Codigo": t_c, "Producto": f_n, "Categoría": "General", "Precio Venta": f_p, "Stock Actual": f_s, "Stock Mínimo": 5}])
-                    df_inv = pd.concat([df_inv, nuevo], ignore_index=True); guardar_datos(df_inv, DB_INV); st.rerun()
+                    n = pd.DataFrame([{"Codigo": fc if tc=="Sí" else "SIN_CODIGO", "Tiene_Codigo": tc, "Producto": fn, "Categoría": "General", "Precio Venta": fp, "Stock Actual": fs, "Stock Mínimo": 5}])
+                    df_inv = pd.concat([df_inv, n], ignore_index=True); guardar_datos(df_inv, DB_INV); st.rerun()
+        
+        st.divider()
         st.dataframe(df_inv, use_container_width=True)
 
-    with pestanas[2]: # CIERRE
-        st.subheader("📊 Reporte Detallado")
-        f_sel = st.date_input("Fecha", datetime.now()).strftime("%Y-%m-%d")
-        v_dia = df_ven[df_ven["Fecha"].str.contains(f_sel)]
+    # --- CIERRE DIARIO (REPORTE CON FIX PARA EXCEL) ---
+    with tabs[2]:
+        st.subheader("📊 Reporte de Cierre")
+        fs_dia = st.date_input("Seleccionar Día", datetime.now()).strftime("%Y-%m-%d")
+        v_dia = df_ven[df_ven["Fecha"].str.contains(fs_dia)]
+        
         if not v_dia.empty:
             st.metric("INGRESO TOTAL", f"${v_dia['Total'].sum():,.2f}")
-            st.write("**Detalle de Ventas y Trabajos:**")
-            # Mostrar tabla con las nuevas columnas
-            st.dataframe(v_dia[["Fecha", "Vendedor", "Producto", "Total", "Metodo Pago", "Ayudante", "Modelo Carro", "Descripcion"]], use_container_width=True)
+            st.write("**Detalle por Método de Pago:**")
+            st.table(v_dia.groupby("Metodo Pago")["Total"].sum())
             
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as wr:
-                v_dia.to_excel(wr, index=False)
-            st.download_button("📥 Descargar Reporte Completo", output.getvalue(), f"cierre_{f_sel}.xlsx")
-        else: st.warning("Sin registros")
+            st.dataframe(v_dia[["Fecha", "Vendedor", "Producto", "Total", "Metodo Pago", "Modelo Carro", "Ayudante", "Descripcion"]])
+            
+            # --- SISTEMA DE DESCARGA SEGURO ---
+            st.write("---")
+            try:
+                # Intento generar Excel
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    v_dia.to_excel(writer, index=False)
+                st.download_button(label="📥 Descargar Cierre (Excel)", data=output.getvalue(), file_name=f"cierre_{fs_dia}.xlsx")
+            except Exception:
+                # Si falla openpyxl, doy la opción CSV automáticamente
+                st.warning("⚠️ Nota: Exportando a formato CSV por compatibilidad del servidor.")
+                csv_data = v_dia.to_csv(index=False).encode('utf-8')
+                st.download_button(label="📥 Descargar Cierre (CSV)", data=csv_data, file_name=f"cierre_{fs_dia}.csv")
+        else:
+            st.info("No hay ventas registradas en esta fecha.")
