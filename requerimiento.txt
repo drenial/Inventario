@@ -1,7 +1,5 @@
 streamlit
 pandas
 Pillow
-pyzbar
 numpy
 openpyxl
-
