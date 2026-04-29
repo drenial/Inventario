@@ -4,4 +4,4 @@ Pillow
 pyzbar
 numpy
 openpyxl
-fpdf2
+
