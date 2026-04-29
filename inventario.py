@@ -10,7 +10,7 @@ from pyzbar.pyzbar import decode
 import numpy as np
 
 # Configuración
-st.set_page_config(page_title="POS Pro - Cierre Diario", layout="centered")
+st.set_page_config(page_title="POS Pro - Ventas Rápidas", layout="centered")
 
 DB_INVENTARIO = "inventario.csv"
 DB_VENTAS = "ventas.csv"
@@ -28,7 +28,8 @@ def guardar_datos(df, archivo):
     df.to_csv(archivo, index=False)
 
 # Inicializar
-df_inv = cargar_datos(DB_INVENTARIO, ["Codigo", "Tiene_Codigo", "Producto", "Categoría", "Precio Venta", "Stock Actual", "Stock Mínimo"])
+columnas_inv = ["Codigo", "Tiene_Codigo", "Producto", "Categoría", "Precio Venta", "Stock Actual", "Stock Mínimo"]
+df_inv = cargar_datos(DB_INVENTARIO, columnas_inv)
 df_ventas = cargar_datos(DB_VENTAS, ["Fecha", "Vendedor", "Producto", "Cantidad", "Total", "Metodo Pago", "Punto Salida"])
 
 # --- SIDEBAR ---
@@ -38,114 +39,116 @@ salida = st.sidebar.radio("📍 Punto de Salida", ["Salida 1", "Salida 2"])
 
 pestana = st.tabs(["🛒 Vender", "📦 Inventario", "📊 Cierre Diario"])
 
-# --- PESTAÑA 1: VENDER (Sin cambios importantes) ---
+# --- PESTAÑA 1: VENDER ---
 with pestana[0]:
     st.subheader("Registrar Salida")
-    opcion_venta = st.radio("Método", ["Escanear", "Búsqueda Manual"], horizontal=True)
-    producto_encontrado = None
     
-    if opcion_venta == "Escanear":
-        foto = st.camera_input("Enfoca el código")
+    # 3 OPCIONES DE BÚSQUEDA
+    modo_busqueda = st.radio("Buscar por:", ["Código Manual / Lector", "Cámara (Escanear)", "Nombre del Producto"], horizontal=True)
+    
+    producto_seleccionado = None
+    
+    # 1. Búsqueda por Código Manual o Lector Físico
+    if modo_busqueda == "Código Manual / Lector":
+        codigo_input = st.text_input("Escribe o escanea el código aquí y presiona Enter", key="cod_manual")
+        if codigo_input:
+            resultado = df_inv[df_inv["Codigo"].astype(str) == codigo_input]
+            if not resultado.empty:
+                producto_seleccionado = resultado.iloc[0]["Producto"]
+                st.info(f"📦 Producto: {producto_seleccionado} | Precio: ${resultado.iloc[0]['Precio Venta']}")
+            else:
+                st.error("Código no encontrado en inventario")
+
+    # 2. Búsqueda por Cámara
+    elif modo_busqueda == "Cámara (Escanear)":
+        foto = st.camera_input("Toma foto al código")
         if foto:
             img = Image.open(foto)
             decodificado = decode(np.array(img))
             if decodificado:
                 cod = decodificado[0].data.decode('utf-8')
-                res = df_inv[df_inv["Codigo"].astype(str) == cod]
-                if not res.empty:
-                    producto_encontrado = res.iloc[0]["Producto"]
-                    st.success(f"Detectado: {producto_encontrado}")
+                resultado = df_inv[df_inv["Codigo"].astype(str) == cod]
+                if not resultado.empty:
+                    producto_seleccionado = resultado.iloc[0]["Producto"]
+                    st.success(f"Detectado: {producto_seleccionado}")
+                else:
+                    st.error(f"Código {cod} no registrado")
+
+    # 3. Búsqueda por Nombre
     else:
-        busqueda_v = st.text_input("Escribe nombre...")
-        sugerencias = df_inv[df_inv["Producto"].str.contains(busqueda_v, case=False)]["Producto"].tolist()
-        producto_encontrado = st.selectbox("Selecciona", sugerencias)
+        nombre_input = st.text_input("Escribe el nombre del producto...")
+        sugerencias = df_inv[df_inv["Producto"].str.contains(nombre_input, case=False)]["Producto"].tolist()
+        producto_seleccionado = st.selectbox("Selecciona de la lista", ["Seleccione..."] + sugerencias)
+        if producto_seleccionado == "Seleccione...": producto_seleccionado = None
 
-    with st.form("form_vender"):
-        cant = st.number_input("Cantidad", min_value=1, value=1)
-        pago = st.selectbox("Forma de Pago", ["Pago Móvil", "Punto", "Zelle", "Binance", "Efectivo"])
-        if st.form_submit_button("✅ Procesar Venta") and producto_encontrado:
-            idx = df_inv[df_inv["Producto"] == producto_encontrado].index[0]
-            if df_inv.at[idx, "Stock Actual"] >= cant:
-                df_inv.at[idx, "Stock Actual"] -= cant
-                guardar_datos(df_inv, DB_INVENTARIO)
-                nueva_v = pd.DataFrame([{
-                    "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "Vendedor": vendedor, "Producto": producto_encontrado,
-                    "Cantidad": cant, "Total": df_inv.at[idx, "Precio Venta"] * cant,
-                    "Metodo Pago": pago, "Punto Salida": salida
-                }])
-                df_ventas = pd.concat([df_ventas, nueva_v], ignore_index=True)
-                guardar_datos(df_ventas, DB_VENTAS)
-                st.success("¡Venta Exitosa!")
-                st.rerun()
+    # FORMULARIO FINAL DE VENTA
+    if producto_seleccionado:
+        with st.form("confirmar_venta"):
+            st.write(f"### Vendiendo: {producto_seleccionado}")
+            cant = st.number_input("Cantidad a vender", min_value=1, value=1)
+            pago = st.selectbox("Método de Pago", ["Pago Móvil", "Punto", "Zelle", "Binance", "Efectivo"])
+            
+            if st.form_submit_button("💰 PROCESAR VENTA"):
+                idx = df_inv[df_inv["Producto"] == producto_seleccionado].index[0]
+                if df_inv.at[idx, "Stock Actual"] >= cant:
+                    # Restar stock
+                    df_inv.at[idx, "Stock Actual"] -= cant
+                    guardar_datos(df_inv, DB_INVENTARIO)
+                    # Registrar venta
+                    nueva_v = pd.DataFrame([{
+                        "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "Vendedor": vendedor, "Producto": producto_seleccionado,
+                        "Cantidad": cant, "Total": df_inv.at[idx, "Precio Venta"] * cant,
+                        "Metodo Pago": pago, "Punto Salida": salida
+                    }])
+                    df_ventas = pd.concat([df_ventas, nueva_v], ignore_index=True)
+                    guardar_datos(df_ventas, DB_VENTAS)
+                    st.success(f"Vendido: {cant} {producto_seleccionado}")
+                    st.rerun()
+                else:
+                    st.error("No hay stock suficiente")
 
-# --- PESTAÑA 2: INVENTARIO (Botón agregar e interfaz nueva) ---
+# --- PESTAÑA 2: INVENTARIO ---
 with pestana[1]:
     st.subheader("Gestión de Inventario")
     if st.button("➕ AGREGAR NUEVO PRODUCTO"):
         st.session_state.mostrar_form = not st.session_state.get('mostrar_form', False)
 
     if st.session_state.get('mostrar_form', False):
-        with st.form("form_nuevo_prod"):
-            tiene_cod = st.radio("¿Tiene código?", ["Sí", "No"], horizontal=True)
-            cod_f = st.text_input("Código Físico")
-            nom_p = st.text_input("Nombre")
-            pre_p = st.number_input("Precio", min_value=0.0)
-            sto_p = st.number_input("Stock", min_value=0)
-            if st.form_submit_button("Guardar"):
-                nuevo_p = pd.DataFrame([{"Codigo": cod_f if tiene_cod=="Sí" else "SIN_CODIGO", "Tiene_Codigo": tiene_cod, "Producto": nom_p, "Categoría": "General", "Precio Venta": pre_p, "Stock Actual": sto_p, "Stock Mínimo": 5}])
-                df_inv = pd.concat([df_inv, nuevo_p], ignore_index=True)
+        with st.form("form_nuevo_p"):
+            tiene_c = st.radio("¿Tiene código?", ["Sí", "No"], horizontal=True)
+            cod_f = st.text_input("Código de Barras / Físico")
+            nom_p = st.text_input("Nombre del Producto")
+            pre_p = st.number_input("Precio Venta", min_value=0.0)
+            sto_p = st.number_input("Stock Inicial", min_value=0)
+            if st.form_submit_button("Guardar Producto"):
+                nuevo = pd.DataFrame([{"Codigo": cod_f if tiene_c=="Sí" else "SIN_CODIGO", "Tiene_Codigo": tiene_c, "Producto": nom_p, "Categoría": "General", "Precio Venta": pre_p, "Stock Actual": sto_p, "Stock Mínimo": 5}])
+                df_inv = pd.concat([df_inv, nuevo], ignore_index=True)
                 guardar_datos(df_inv, DB_INVENTARIO)
+                st.success("Registrado!")
                 st.rerun()
 
-    st.dataframe(df_inv, use_container_width=True)
+    # Buscador en tabla
+    busq = st.text_input("🔍 Buscar en inventario por nombre o código...")
+    df_ver = df_inv[df_inv["Producto"].str.contains(busq, case=False) | df_inv["Codigo"].astype(str).str.contains(busq)]
+    st.dataframe(df_ver, use_container_width=True)
 
 # --- PESTAÑA 3: CIERRE DIARIO ---
 with pestana[2]:
     st.subheader("📊 Reporte de Cierre")
+    fecha_sel = st.date_input("Día del cierre", datetime.now())
+    fecha_s = fecha_sel.strftime("%Y-%m-%d")
+    v_dia = df_ventas[df_ventas["Fecha"].str.contains(fecha_s)]
     
-    # Selector de fecha para el cierre
-    fecha_cierre = st.date_input("Selecciona el día para el cierre", datetime.now())
-    fecha_str = fecha_cierre.strftime("%Y-%m-%d")
-    
-    # Filtrar ventas del día
-    ventas_hoy = df_ventas[df_ventas["Fecha"].str.contains(fecha_str)]
-    
-    if not ventas_hoy.empty:
-        # Métricas principales
-        total_dinero = ventas_hoy["Total"].sum()
-        st.metric("INGRESO TOTAL DEL DÍA", f"${total_dinero:,.2f}")
+    if not v_dia.empty:
+        st.metric("INGRESO TOTAL", f"${v_dia['Total'].sum():,.2f}")
+        st.write("**Desglose de Pagos:**")
+        st.table(v_dia.groupby("Metodo Pago")["Total"].sum())
         
-        col_c1, col_c2 = st.columns(2)
-        
-        # Resumen por Método de Pago
-        with col_c1:
-            st.write("**Por Método de Pago:**")
-            resumen_pago = ventas_hoy.groupby("Metodo Pago")["Total"].sum()
-            st.dataframe(resumen_pago)
-            
-        # Resumen por Punto de Salida
-        with col_c2:
-            st.write("**Por Punto de Salida:**")
-            resumen_salida = ventas_hoy.groupby("Punto Salida")["Total"].sum()
-            st.dataframe(resumen_salida)
-
-        st.write("**Detalle de productos vendidos:**")
-        detalle_prod = ventas_hoy.groupby("Producto")["Cantidad"].sum().reset_index()
-        st.table(detalle_prod)
-
-        # --- FUNCIÓN PARA DESCARGAR EXCEL ---
+        # Descargar Excel
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            ventas_hoy.to_excel(writer, index=False, sheet_name='Ventas_Detalladas')
-            resumen_pago.to_excel(writer, sheet_name='Resumen_Pagos')
-            detalle_prod.to_excel(writer, index=False, sheet_name='Resumen_Productos')
-        
-        st.download_button(
-            label="📥 Descargar Cierre en Excel",
-            data=output.getvalue(),
-            file_name=f"cierre_{fecha_str}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            v_dia.to_excel(writer, index=False, sheet_name='Cierre')
+        st.download_button("📥 Descargar Cierre Excel", output.getvalue(), f"cierre_{fecha_s}.xlsx")
     else:
-        st.warning(f"No hay ventas registradas el día {fecha_str}")
+        st.warning("No hay ventas en esta fecha")
