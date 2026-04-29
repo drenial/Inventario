@@ -5,14 +5,13 @@ from datetime import datetime
 import io
 from PIL import Image
 import numpy as np
-from fpdf import FPDF
 
 # --- CONFIGURACIÓN DE SEGURIDAD ---
 # CAMBIA "1234" POR TU CLAVE DESEADA
 CLAVE_ADMIN = "0302"
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Bodega & Taller POS", page_icon="🛠️", layout="centered")
+st.set_page_config(page_title="POS & Servicios", page_icon="🛠️", layout="centered")
 
 # Estilo para ocultar menús de Streamlit
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
@@ -20,10 +19,8 @@ st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;}
 DB_INV = "inventario.csv"
 DB_VEN = "ventas.csv"
 
-# Estados de sesión
 if 'carrito' not in st.session_state: st.session_state.carrito = []
 if 'admin_auth' not in st.session_state: st.session_state.admin_auth = False
-if 'ultimo_ticket' not in st.session_state: st.session_state.ultimo_ticket = None
 
 # --- FUNCIONES DE DATOS ---
 def cargar_datos(archivo, columnas):
@@ -40,70 +37,19 @@ def cargar_datos(archivo, columnas):
 def guardar_datos(df, archivo):
     df.to_csv(archivo, index=False)
 
-# --- FUNCIÓN GENERAR TICKET PDF (AJUSTADO A 58mm / 5.5cm) ---
-def generar_ticket_pdf(vendedor, items, total, metodo, salida):
-    # Formato 58mm de ancho (estándar para papel de 5.5cm)
-    pdf = FPDF(format=(58, 150)) 
-    pdf.add_page()
-    pdf.set_margins(left=4, top=4, right=4)
-    pdf.set_auto_page_break(auto=True, margin=5)
-    
-    # Encabezado
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(0, 6, "MI NEGOCIO", ln=True, align="C")
-    pdf.set_font("Arial", "", 7)
-    pdf.cell(0, 4, f"Fecha: {datetime.now().strftime('%d/%m/%y %H:%M')}", ln=True, align="C")
-    pdf.cell(0, 4, f"Caja: {salida} | Vend: {vendedor}", ln=True, align="C")
-    pdf.cell(0, 3, "-"*25, ln=True, align="C")
-    
-    # Tabla de productos
-    pdf.set_font("Arial", "B", 7)
-    pdf.cell(25, 5, "Producto/Serv", 0)
-    pdf.cell(8, 5, "Cant", 0)
-    pdf.cell(15, 5, "Subt", 0, align="R")
-    pdf.ln(5)
-    
-    pdf.set_font("Arial", "", 6)
-    for it in items:
-        # Nombre corto para que no se desborde
-        nom = str(it['Producto'])[:18]
-        pdf.cell(25, 4, nom, 0)
-        pdf.cell(8, 4, str(it['Cantidad']), 0)
-        pdf.cell(15, 4, f"${it['Subtotal']:.2f}", 0, align="R")
-        pdf.ln(4)
-        # Si es un trabajo, mostrar el modelo del carro abajo
-        if it.get("Modelo Carro") and it["Modelo Carro"] != "":
-            pdf.set_font("Arial", "I", 5)
-            pdf.cell(0, 3, f"  Carro: {it['Modelo Carro']}", ln=True)
-            pdf.set_font("Arial", "", 6)
-    
-    # Totales
-    pdf.ln(2)
-    pdf.cell(0, 1, "-"*25, ln=True, align="C")
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(0, 8, f"TOTAL: ${total:.2f}", ln=True, align="R")
-    pdf.set_font("Arial", "B", 7)
-    pdf.cell(0, 4, f"Pago: {metodo}", ln=True, align="L")
-    
-    pdf.ln(4)
-    pdf.set_font("Arial", "I", 7)
-    pdf.cell(0, 5, "¡Gracias por su visita!", ln=True, align="C")
-    
-    return pdf.output()
-
-# Columnas Base
+# Columnas actualizadas para incluir servicios
 C_INV = ["Codigo", "Tiene_Codigo", "Producto", "Categoría", "Precio Venta", "Stock Actual", "Stock Mínimo"]
 C_VEN = ["Fecha", "Vendedor", "Producto", "Cantidad", "Total", "Metodo Pago", "Punto Salida", "Ayudante", "Descripcion", "Modelo Carro"]
 
 df_inv = cargar_datos(DB_INV, C_INV)
 df_ven = cargar_datos(DB_VEN, C_VEN)
 
-# --- SIDEBAR (SEGURIDAD) ---
+# --- SIDEBAR (ACCESO) ---
 st.sidebar.title("🔐 Acceso")
 if not st.session_state.admin_auth:
-    pass_in = st.sidebar.text_input("Clave Admin", type="password")
+    password = st.sidebar.text_input("Clave de Admin", type="password")
     if st.sidebar.button("Entrar"):
-        if pass_in == CLAVE_ADMIN:
+        if password == CLAVE_ADMIN:
             st.session_state.admin_auth = True
             st.rerun()
 else:
@@ -112,97 +58,140 @@ else:
         st.session_state.admin_auth = False
         st.rerun()
 
-vendedor_fijo = st.sidebar.selectbox("👤 Personal", ["Vendedor 1", "Vendedor 2", "Admin"])
-salida_fija = st.sidebar.radio("📍 Punto", ["Salida 1", "Salida 2"])
+vendedor_fijo = st.sidebar.selectbox("👤 Vendedor/Técnico", ["Vendedor 1", "Vendedor 2", "Admin"])
+salida = st.sidebar.radio("📍 Punto", ["Salida 1", "Salida 2"])
 
-# Pestañas
-tabs = st.tabs(["🛒 Venta", "📦 Stock", "📊 Cierre"]) if st.session_state.admin_auth else st.tabs(["🛒 Venta"])
+pestanas = st.tabs(["🛒 Punto de Venta", "📦 Inventario", "📊 Cierre Diario"]) if st.session_state.admin_auth else st.tabs(["🛒 Punto de Venta"])
 
-# --- PESTAÑA 1: VENTAS ---
-with tabs[0]:
+# --- PESTAÑA 1: PUNTO DE VENTA ---
+with pestanas[0]:
     st.subheader("🛒 Facturación")
-    opcion = st.radio("Agregar:", ["📦 Producto", "🛠️ Servicio"], horizontal=True)
-    p_sel = None
+    
+    tipo_item = st.radio("¿Qué deseas agregar?", ["🛒 Producto", "🛠️ Trabajo/Servicio"], horizontal=True)
+    p_encontrado = None
 
-    if opcion == "📦 Producto":
-        c1, c2 = st.columns(2)
-        with c1:
-            m = st.radio("Buscar:", ["Código", "Nombre"], horizontal=True)
-            if m == "Código":
-                cod = st.text_input("Código")
-                if cod:
-                    res = df_inv[df_inv["Codigo"].astype(str) == str(cod)]
-                    if not res.empty: p_sel = res.iloc[0]
+    if tipo_item == "🛒 Producto":
+        c_b1, c_b2 = st.columns(2)
+        with c_b1:
+            modo = st.radio("Buscar por:", ["Código", "Nombre"], horizontal=True)
+            if modo == "Código":
+                cod_in = st.text_input("Escanear/Escribir Código")
+                if cod_in:
+                    res = df_inv[df_inv["Codigo"].astype(str) == str(cod_in)]
+                    if not res.empty: p_encontrado = res.iloc[0]
             else:
-                nom = st.text_input("Nombre")
-                if nom:
-                    sug = df_inv[df_inv["Producto"].str.contains(nom, case=False)]["Producto"].tolist()
-                    sel = st.selectbox("Elegir", ["-"] + sug)
-                    if sel != "-": p_sel = df_inv[df_inv["Producto"] == sel].iloc[0]
-        with c2:
-            if p_sel is not None:
-                st.info(f"**{p_sel['Producto']}**\n\nStock: {p_sel['Stock Actual']}")
-                can = st.number_input("Cant", min_value=1, max_value=max(1, int(p_sel['Stock Actual'])), value=1)
-                if st.button("➕ Añadir"):
-                    st.session_state.carrito.append({"Tipo": "Prod", "Producto": p_sel['Producto'], "Precio": float(p_sel['Precio Venta']), "Cantidad": int(can), "Subtotal": float(p_sel['Precio Venta']*can), "Ayudante": "", "Descripcion": "", "Modelo Carro": ""})
+                nom_in = st.text_input("Nombre del producto")
+                if nom_in:
+                    sug = df_inv[df_inv["Producto"].str.contains(nom_in, case=False)]["Producto"].tolist()
+                    sel = st.selectbox("Seleccionar", ["-"] + sug)
+                    if sel != "-": p_encontrado = df_inv[df_inv["Producto"] == sel].iloc[0]
+        
+        with c_b2:
+            if p_encontrado is not None:
+                st.info(f"**{p_encontrado['Producto']}**\n\nPrecio: ${p_encontrado['Precio Venta']}")
+                cant = st.number_input("Cant", min_value=1, max_value=max(1, int(p_encontrado['Stock Actual'])), value=1)
+                if st.button("➕ Añadir Producto"):
+                    st.session_state.carrito.append({
+                        "Tipo": "Producto", "Producto": p_encontrado['Producto'],
+                        "Precio": float(p_encontrado['Precio Venta']), "Cantidad": int(cant),
+                        "Subtotal": float(p_encontrado['Precio Venta'] * cant),
+                        "Ayudante": "", "Descripcion": "Venta de repuesto", "Modelo Carro": ""
+                    })
                     st.rerun()
-    else:
+    
+    else: # SECCIÓN DE TRABAJO/SERVICIO
         with st.container():
-            st.info("🛠️ Trabajo")
-            ct1, ct2 = st.columns(2)
-            with ct1:
-                desc = st.text_area("Descripción")
-                carro = st.text_input("Carro (Opcional)")
-            with ct2:
-                ayu = st.text_input("Ayudante")
-                pre = st.number_input("Costo $", min_value=0.0)
-            if st.button("➕ Añadir Servicio"):
-                if desc and pre > 0:
-                    st.session_state.carrito.append({"Tipo": "Trab", "Producto": desc[:20], "Precio": float(pre), "Cantidad": 1, "Subtotal": float(pre), "Ayudante": ayu, "Descripcion": desc, "Modelo Carro": carro})
+            st.info("🛠️ Registro de Mano de Obra / Trabajo")
+            c_t1, c_t2 = st.columns(2)
+            with c_t1:
+                desc_trabajo = st.text_area("¿Qué trabajo se realizó?", placeholder="Ej: Cambio de aceite y filtro")
+                modelo_carro = st.text_input("Modelo del Carro (Opcional)")
+            with c_t2:
+                ayudante = st.text_input("Nombre del Ayudante (Opcional)")
+                precio_trabajo = st.number_input("Costo del Trabajo ($)", min_value=0.0, step=1.0)
+            
+            if st.button("➕ Añadir Trabajo al Carrito"):
+                if desc_trabajo and precio_trabajo > 0:
+                    st.session_state.carrito.append({
+                        "Tipo": "Trabajo", "Producto": "SERVICIO: " + desc_trabajo[:20] + "...",
+                        "Precio": float(precio_trabajo), "Cantidad": 1,
+                        "Subtotal": float(precio_trabajo),
+                        "Ayudante": ayudante, "Descripcion": desc_trabajo, "Modelo Carro": modelo_carro
+                    })
+                    st.success("Trabajo añadido")
                     st.rerun()
+                else: st.warning("Por favor rellena descripción y precio")
 
     st.divider()
+    
     if st.session_state.carrito:
-        for i, it in enumerate(st.session_state.carrito):
-            col_i, col_d = st.columns([4, 1])
-            col_i.write(f"**{it['Cantidad']}x** {it['Producto']} - ${it['Subtotal']:.2f}")
-            if col_d.button("🗑️", key=f"del_{i}"):
+        st.write("### Detalle de Factura")
+        for i, item in enumerate(st.session_state.carrito):
+            c_it, c_dl = st.columns([4, 1])
+            tipo_icon = "📦" if item["Tipo"] == "Producto" else "🛠️"
+            c_it.write(f"{tipo_icon} **{item['Cantidad']}x** {item['Producto']} — ${item['Subtotal']:,.2f}")
+            if c_dl.button("🗑️", key=f"del_{i}"):
                 st.session_state.carrito.pop(i); st.rerun()
         
-        total_p = sum(i['Subtotal'] for i in st.session_state.carrito)
-        st.markdown(f"### TOTAL: ${total_p:,.2f}")
-        met = st.selectbox("Metodo Pago", ["Pago Móvil", "Punto", "Zelle", "Binance", "Efectivo"])
+        total_p = sum(it['Subtotal'] for it in st.session_state.carrito)
+        st.markdown(f"## TOTAL A COBRAR: ${total_p:,.2f}")
+        metodo = st.selectbox("Método de Pago", ["Pago Móvil", "Punto", "Zelle", "Binance", "Efectivo"])
         
-        if st.button("✅ PROCESAR", use_container_width=True):
-            ticket_info = {"vendedor": vendedor_fijo, "items": list(st.session_state.carrito), "total": total_p, "metodo": met, "salida": salida_fija}
-            for it in st.session_state.carrito:
-                if it["Tipo"] == "Prod":
-                    idx = df_inv[df_inv["Producto"] == it["Producto"]].index[0]
-                    df_inv.at[idx, "Stock Actual"] -= it["Cantidad"]
-                nv = pd.DataFrame([{"Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"), "Vendedor": vendedor_fijo, "Producto": it["Producto"], "Cantidad": it["Cantidad"], "Total": it["Subtotal"], "Metodo Pago": met, "Punto Salida": salida_fija, "Ayudante": it["Ayudante"], "Descripcion": it["Descripcion"], "Modelo Carro": it["Modelo Carro"]}])
+        cb1, cb2 = st.columns(2)
+        if cb1.button("✅ PROCESAR TODO", use_container_width=True):
+            for item in st.session_state.carrito:
+                # Si es producto, restar stock
+                if item["Tipo"] == "Producto":
+                    idx = df_inv[df_inv["Producto"] == item["Producto"]].index[0]
+                    df_inv.at[idx, "Stock Actual"] -= item["Cantidad"]
+                
+                # Registrar en ventas (Producto o Trabajo)
+                nv = pd.DataFrame([{
+                    "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "Vendedor": vendedor_fijo, "Producto": item["Producto"],
+                    "Cantidad": item["Cantidad"], "Total": item["Subtotal"],
+                    "Metodo Pago": metodo, "Punto Salida": salida,
+                    "Ayudante": item["Ayudante"], "Descripcion": item["Descripcion"],
+                    "Modelo Carro": item["Modelo Carro"]
+                }])
                 df_ven = pd.concat([df_ven, nv], ignore_index=True)
+            
             guardar_datos(df_inv, DB_INV); guardar_datos(df_ven, DB_VEN)
-            st.session_state.ultimo_ticket = ticket_info
+            st.session_state.carrito = []
+            st.success("¡Operación Exitosa!"); st.balloons(); st.rerun()
+        
+        if cb2.button("🚫 CANCELAR TODO", use_container_width=True):
             st.session_state.carrito = []
             st.rerun()
 
-    if st.session_state.ultimo_ticket:
-        st.success("¡Venta Guardada!")
-        pdf_t = generar_ticket_pdf(st.session_state.ultimo_ticket["vendedor"], st.session_state.ultimo_ticket["items"], st.session_state.ultimo_ticket["total"], st.session_state.ultimo_ticket["metodo"], st.session_state.ultimo_ticket["salida"])
-        st.download_button("📥 IMPRIMIR TICKET (58mm)", pdf_t, f"ticket_{datetime.now().strftime('%H%M%S')}.pdf", "application/pdf", use_container_width=True)
-        if st.button("Nueva Factura"):
-            st.session_state.ultimo_ticket = None
-            st.rerun()
-
-# --- PESTAÑAS ADMIN ---
+# --- PESTAÑAS ADMIN (INVENTARIO Y CIERRE) ---
 if st.session_state.admin_auth:
-    with tabs[1]:
-        st.subheader("📦 Stock")
+    with pestanas[1]: # INVENTARIO
+        st.subheader("📦 Inventario")
+        if st.button("➕ NUEVO PRODUCTO"):
+            st.session_state.mostrar_form = not st.session_state.get('mostrar_form', False)
+        if st.session_state.get('mostrar_form', False):
+            with st.form("f_new"):
+                t_c = st.radio("¿Código?", ["Sí", "No"], horizontal=True)
+                f_c = st.text_input("Código"); f_n = st.text_input("Nombre")
+                f_p = st.number_input("Precio", min_value=0.0); f_s = st.number_input("Stock", min_value=0)
+                if st.form_submit_button("Guardar"):
+                    nuevo = pd.DataFrame([{"Codigo": f_c if t_c=="Sí" else "SIN_CODIGO", "Tiene_Codigo": t_c, "Producto": f_n, "Categoría": "General", "Precio Venta": f_p, "Stock Actual": f_s, "Stock Mínimo": 5}])
+                    df_inv = pd.concat([df_inv, nuevo], ignore_index=True); guardar_datos(df_inv, DB_INV); st.rerun()
         st.dataframe(df_inv, use_container_width=True)
-    with tabs[2]:
-        st.subheader("📊 Cierre")
-        fs = st.date_input("Día", datetime.now()).strftime("%Y-%m-%d")
-        vd = df_ven[df_ven["Fecha"].str.contains(fs)]
-        if not vd.empty:
-            st.metric("TOTAL", f"${vd['Total'].sum():,.2f}")
-            st.dataframe(vd[["Fecha", "Producto", "Total", "Metodo Pago", "Modelo Carro"]])
+
+    with pestanas[2]: # CIERRE
+        st.subheader("📊 Reporte Detallado")
+        f_sel = st.date_input("Fecha", datetime.now()).strftime("%Y-%m-%d")
+        v_dia = df_ven[df_ven["Fecha"].str.contains(f_sel)]
+        if not v_dia.empty:
+            st.metric("INGRESO TOTAL", f"${v_dia['Total'].sum():,.2f}")
+            st.write("**Detalle de Ventas y Trabajos:**")
+            # Mostrar tabla con las nuevas columnas
+            st.dataframe(v_dia[["Fecha", "Vendedor", "Producto", "Total", "Metodo Pago", "Ayudante", "Modelo Carro", "Descripcion"]], use_container_width=True)
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as wr:
+                v_dia.to_excel(wr, index=False)
+            st.download_button("📥 Descargar Reporte Completo", output.getvalue(), f"cierre_{f_sel}.xlsx")
+        else: st.warning("Sin registros")
