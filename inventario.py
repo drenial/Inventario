@@ -7,7 +7,8 @@ from PIL import Image
 import numpy as np
 
 # --- CONFIGURACIÓN DE SEGURIDAD ---
-CLAVE_ADMIN = 0302" 
+# CAMBIA "1234" POR TU CLAVE DESEADA
+CLAVE_ADMIN = "0302" 
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="POS & Servicios", page_icon="🛠️", layout="centered")
